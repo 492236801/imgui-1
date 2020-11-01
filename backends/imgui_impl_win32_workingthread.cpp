@@ -120,6 +120,9 @@ public:
     ~wtf_queue() = default;
 };
 
+// ImGui Data
+static void (*g_fLastSetIMEPosFn)(int x, int y) = NULL;
+
 // Win32 Data
 static HWND                 g_hWnd = NULL;
 static INT64                g_Time = 0;
@@ -306,9 +309,11 @@ void ImGui_ImplWin32_UpdateMousePos()
     {
         static ImVec2 _cache_mouse_position[16] = {};
         static size_t _cache_mouse_position_index = 0;
+        
         _cache_mouse_position[_cache_mouse_position_index] = io.MousePos;
         PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2, 0,
             (LPARAM)(ptrdiff_t)(&_cache_mouse_position[_cache_mouse_position_index]));
+        
         _cache_mouse_position_index = (_cache_mouse_position_index + 1) % 16;
     }
 }
@@ -359,6 +364,18 @@ void ImGui_ImplWin32_UpdateGamepads()
     }
 #endif // #ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
 }
+void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
+{
+    static int _cache_ime_position[32] = {};
+    static size_t _cache_ime_position_index = 0;
+    
+    _cache_ime_position[_cache_ime_position_index] = x;
+    _cache_ime_position[_cache_ime_position_index + 1] = y;
+    PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 3, 0,
+        (LPARAM)(ptrdiff_t)(&_cache_ime_position[_cache_ime_position_index]));
+    
+    _cache_ime_position_index = (_cache_ime_position_index + 2) % 32;
+}
 
 // API
 bool    ImGui_ImplWin32WorkingThread_Init(void* hwnd)
@@ -374,7 +391,11 @@ bool    ImGui_ImplWin32WorkingThread_Init(void* hwnd)
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;         // We can honor GetMouseCursor() values (optional)
     io.BackendFlags |= ImGuiBackendFlags_HasSetMousePos;          // We can honor io.WantSetMousePos requests (optional, rarely used)
     io.BackendPlatformName = "imgui_impl_win32_workingthread";
+    
+    // Setup backend IME support
     io.ImeWindowHandle = hwnd;
+    g_fLastSetIMEPosFn = io.ImeSetInputScreenPosFn;
+    io.ImeSetInputScreenPosFn = &ImGui_ImplWin32_UpdateIMEPos;
     
     // Keyboard mapping. ImGui will use those indices to peek into the io.KeysDown[] array that we will update during the application lifetime.
     io.KeyMap[ImGuiKey_Tab] = VK_TAB;
@@ -404,6 +425,11 @@ bool    ImGui_ImplWin32WorkingThread_Init(void* hwnd)
 }
 void    ImGui_ImplWin32WorkingThread_Shutdown()
 {
+    ImGuiIO& io = ImGui::GetIO();
+    io.ImeWindowHandle = NULL;
+    io.ImeSetInputScreenPosFn = g_fLastSetIMEPosFn;
+    g_fLastSetIMEPosFn = NULL;
+    
     g_hWnd = NULL;
     g_Time = 0;
     g_TicksPerSecond = 0;
@@ -414,9 +440,6 @@ void    ImGui_ImplWin32WorkingThread_Shutdown()
     g_Win32MSG = wtf_queue<MSG, 1024>(); // clean
     g_bUpdateCursor = false;
     g_sCursorName = IDC_ARROW;
-    
-    ImGuiIO& io = ImGui::GetIO();
-    io.ImeWindowHandle = NULL;
 }
 void    ImGui_ImplWin32WorkingThread_NewFrame()
 {
@@ -541,6 +564,20 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
             POINT pos = { (int)ptr->x, (int)ptr->y };
             ClientToScreen(hwnd, &pos);
             SetCursorPos(pos.x, pos.y);
+        }
+        return 0;
+    case WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 3:
+        {
+            int* ptr = (int*)(ptrdiff_t)lParam;
+            if (HIMC himc = ImmGetContext(hwnd))
+            {
+                COMPOSITIONFORM cf;
+                cf.ptCurrentPos.x = ptr[0];
+                cf.ptCurrentPos.y = ptr[1];
+                cf.dwStyle = CFS_FORCE_POSITION;
+                ImmSetCompositionWindow(himc, &cf);
+                ImmReleaseContext(hwnd, himc);
+            }
         }
         return 0;
     }
