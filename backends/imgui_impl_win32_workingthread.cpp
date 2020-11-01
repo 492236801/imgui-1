@@ -222,17 +222,15 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
             }
             updateMousePosition();
             break;
-        case WM_MOUSEWHEEL:
-            io.MouseWheel  += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
-            updateMousePosition();
-            break;
-        case WM_MOUSEHWHEEL:
-            io.MouseWheelH += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
-            updateMousePosition();
-            break;
         case WM_MOUSEMOVE:
         case WM_MOUSEHOVER:
             updateMousePosition();
+            break;
+        case WM_MOUSEWHEEL:
+            io.MouseWheel  += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
+            break;
+        case WM_MOUSEHWHEEL:
+            io.MouseWheelH += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
             break;
         
         case WM_KEYDOWN:
