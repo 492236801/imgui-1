@@ -304,8 +304,12 @@ void ImGui_ImplWin32_UpdateMousePos()
     // Set OS mouse position if requested (rarely used, only when ImGuiConfigFlags_NavEnableSetMousePos is enabled by user)
     if (io.WantSetMousePos)
     {
-        ImVec2* pos = new ImVec2(io.MousePos);
-        PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2, 0, (LPARAM)(ptrdiff_t)pos);
+        static ImVec2 _cache_mouse_position[16] = {};
+        static size_t _cache_mouse_position_index = 0;
+        _cache_mouse_position[_cache_mouse_position_index] = io.MousePos;
+        PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2, 0,
+            (LPARAM)(ptrdiff_t)(&_cache_mouse_position[_cache_mouse_position_index]));
+        _cache_mouse_position_index = (_cache_mouse_position_index + 1) % 16;
     }
 }
 void ImGui_ImplWin32_UpdateGamepads()
@@ -535,7 +539,6 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
         {
             ImVec2* ptr = (ImVec2*)(ptrdiff_t)lParam;
             POINT pos = { (int)ptr->x, (int)ptr->y };
-            delete ptr;
             ClientToScreen(hwnd, &pos);
             SetCursorPos(pos.x, pos.y);
         }
