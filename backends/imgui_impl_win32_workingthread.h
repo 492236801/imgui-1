@@ -12,7 +12,7 @@
 
 // Warning:
 //  1. This is a experimental implement and may have many bugs.
-//  2. Lock free message exchange queue (g_Win32MSG) may be full and some Win32 messages will be missed.
+//  2. Lock free message exchange queue (g_vWin32MSG) may be full and some Win32 messages will be missed.
 //  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working because it is asynchronous (execution order is not guaranteed).
 //  4. Input delay may be large.
 //  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working.

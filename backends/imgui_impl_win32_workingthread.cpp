@@ -12,7 +12,7 @@
 
 // Warning:
 //  1. This is a experimental implement and may have many bugs.
-//  2. Lock free message exchange queue (g_Win32MSG) may be full and some Win32 messages will be missed.
+//  2. Lock free message exchange queue (g_vWin32MSG) may be full and some Win32 messages will be missed.
 //  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working because it is asynchronous (execution order is not guaranteed).
 //  4. Input delay may be large.
 //  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working.
@@ -132,7 +132,8 @@ static bool                 g_HasGamepad = false;
 static bool                 g_WantUpdateHasGamepad = true;
 
 // Win32 ImGui Data Exchange
-static wtf_queue<MSG, 1024> g_Win32MSG;
+static bool                 g_bWindowFocus = true;
+static wtf_queue<MSG, 1024> g_vWin32MSG;
 static bool                 g_bUpdateCursor = false;
 static LPCWSTR              g_sCursorName = IDC_ARROW;
 
@@ -182,6 +183,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
         std::memset(&io.MouseDown, 0, sizeof(io.MouseDown));
         io.MouseWheel = 0;
         io.MouseWheelH = 0;
+        PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 2, 0); // cancel capture
         
         std::memset(&io.KeysDown, 0, sizeof(io.KeysDown));
         io.KeyShift = false;
@@ -189,7 +191,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
         io.KeyAlt = false;
     };
     
-    while (g_Win32MSG.read(msg))
+    auto processInputEvent = [&]() -> bool
     {
         switch (msg.message)
         {
@@ -214,7 +216,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
                 io.MouseDown[button] = true;
             }
             updateMousePosition();
-            break;
+            return true;
         case WM_LBUTTONUP:
         case WM_RBUTTONUP:
         case WM_MBUTTONUP:
@@ -236,41 +238,68 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
                 }
             }
             updateMousePosition();
-            break;
+            return true;
         case WM_MOUSEMOVE:
         case WM_MOUSEHOVER:
             updateMousePosition();
-            break;
+            return true;
         case WM_MOUSEWHEEL:
             io.MouseWheel  += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
-            break;
+            return true;
         case WM_MOUSEHWHEEL:
             io.MouseWheelH += (float)GET_WHEEL_DELTA_WPARAM(msg.wParam) / (float)WHEEL_DELTA;
-            break;
+            return true;
         
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN:
             updateKeyboardKey(true);
-            break;
+            return true;
         case WM_KEYUP:
         case WM_SYSKEYUP:
             updateKeyboardKey(false);
-            break;
+            return true;
         case WM_CHAR:
             if (msg.wParam > 0 && msg.wParam < 0x10000)
                 io.AddInputCharacterUTF16((ImWchar16)msg.wParam);
-            break;
+            return true;
+        }
+        return false;
+    };
+    
+    auto processOtherEvent = [&]() -> bool
+    {
+        switch (msg.message)
+        {
         case WM_SIZE:
             io.DisplaySize = ImVec2((float)(LOWORD(msg.lParam)), (float)(HIWORD(msg.lParam)));
-            break;
+            return true;
         case WM_DEVICECHANGE:
             if ((UINT)msg.wParam == DBT_DEVNODES_CHANGED)
                 g_WantUpdateHasGamepad = true;
-            break;
+            return true;
         case WM_ACTIVATEAPP:
+            switch(msg.wParam)
+            {
+            case TRUE:
+                g_bWindowFocus = true;
+                break;
+            case FALSE:
+                g_bWindowFocus = false;
+                break;
+            }
             resetImGuiInput();
-            break;
+            return true;
         }
+        return false;
+    };
+    
+    while (g_vWin32MSG.read(msg))
+    {
+        if (g_bWindowFocus)
+            if (!processInputEvent())
+                processOtherEvent();
+        else
+            processOtherEvent();
     }
 }
 
@@ -452,7 +481,8 @@ void    ImGui_ImplWin32WorkingThread_Shutdown()
     g_HasGamepad = false;
     g_WantUpdateHasGamepad = true;
     
-    g_Win32MSG = wtf_queue<MSG, 1024>(); // clean
+    g_bWindowFocus = true;
+    g_vWin32MSG = wtf_queue<MSG, 1024>(); // clean
     g_bUpdateCursor = false;
     g_sCursorName = IDC_ARROW;
 }
@@ -516,7 +546,7 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
         msg_v.message = msg;
         msg_v.wParam = wParam;
         msg_v.lParam = lParam;
-        g_Win32MSG.write(msg_v); // what will happen if queue is full ???
+        g_vWin32MSG.write(msg_v); // what will happen if queue is full ???
     };
     
     ImGuiIO& io = ImGui::GetIO();
