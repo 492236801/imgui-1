@@ -177,6 +177,18 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
             io.KeysDown[vk] = down;
     };
     
+    auto resetImGuiInput = [&]() -> void
+    {
+        std::memset(&io.MouseDown, 0, sizeof(io.MouseDown));
+        io.MouseWheel = 0;
+        io.MouseWheelH = 0;
+        
+        std::memset(&io.KeysDown, 0, sizeof(io.KeysDown));
+        io.KeyShift = false;
+        io.KeyCtrl = false;
+        io.KeyAlt = false;
+    };
+    
     while (g_Win32MSG.read(msg))
     {
         switch (msg.message)
@@ -254,6 +266,9 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
         case WM_DEVICECHANGE:
             if ((UINT)msg.wParam == DBT_DEVNODES_CHANGED)
                 g_WantUpdateHasGamepad = true;
+            break;
+        case WM_ACTIVATEAPP:
+            resetImGuiInput();
             break;
         }
     }
@@ -528,6 +543,7 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
     
     case WM_SIZE:
     case WM_DEVICECHANGE:
+    case WM_ACTIVATEAPP:
         dispatch();
         return 0;
     
