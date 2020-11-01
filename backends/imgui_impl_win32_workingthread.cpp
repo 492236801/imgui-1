@@ -142,6 +142,22 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
     ImGuiIO& io = ImGui::GetIO();
     MSG msg;
     
+    auto resetImGuiInput = [&]() -> void
+    {
+        #ifdef IMGUI_IMPL_WIN32WORKINGTHREAD_RESET_INPUT_WHEN_WINDOW_FOCUS_LOSE
+            std::memset(&io.MouseDown, 0, sizeof(io.MouseDown));
+            io.MouseWheel = 0;
+            io.MouseWheelH = 0;
+            io.MousePos = ImVec2(0.0f, 0.0f);
+            PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 2, 0); // cancel capture
+            
+            std::memset(&io.KeysDown, 0, sizeof(io.KeysDown));
+            io.KeyShift = false;
+            io.KeyCtrl = false;
+            io.KeyAlt = false;
+        #endif
+    };
+    
     auto updateMousePosition = [&]() -> void
     {
         io.MousePos = ImVec2(
@@ -176,19 +192,6 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
         }
         if (vk < 256)
             io.KeysDown[vk] = down;
-    };
-    
-    auto resetImGuiInput = [&]() -> void
-    {
-        std::memset(&io.MouseDown, 0, sizeof(io.MouseDown));
-        io.MouseWheel = 0;
-        io.MouseWheelH = 0;
-        PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 2, 0); // cancel capture
-        
-        std::memset(&io.KeysDown, 0, sizeof(io.KeysDown));
-        io.KeyShift = false;
-        io.KeyCtrl = false;
-        io.KeyAlt = false;
     };
     
     auto processInputEvent = [&]() -> bool
@@ -270,24 +273,28 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
     {
         switch (msg.message)
         {
+        case WM_ACTIVATEAPP:
+            #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_REVICE_INPUT_WHEN_WINDOW_FOCUS_LOST
+                switch(msg.wParam)
+                {
+                case TRUE:
+                    g_bWindowFocus = true;
+                    break;
+                case FALSE:
+                    g_bWindowFocus = false;
+                    break;
+                }
+            #endif
+            resetImGuiInput();
+            return true;
         case WM_SIZE:
             io.DisplaySize = ImVec2((float)(LOWORD(msg.lParam)), (float)(HIWORD(msg.lParam)));
             return true;
         case WM_DEVICECHANGE:
             if ((UINT)msg.wParam == DBT_DEVNODES_CHANGED)
-                g_WantUpdateHasGamepad = true;
-            return true;
-        case WM_ACTIVATEAPP:
-            switch(msg.wParam)
             {
-            case TRUE:
-                g_bWindowFocus = true;
-                break;
-            case FALSE:
-                g_bWindowFocus = false;
-                break;
+                g_WantUpdateHasGamepad = true;
             }
-            resetImGuiInput();
             return true;
         }
         return false;
@@ -296,10 +303,16 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
     while (g_vWin32MSG.read(msg))
     {
         if (g_bWindowFocus)
+        {
             if (!processInputEvent())
+            {
                 processOtherEvent();
+            }
+        }
         else
+        {
             processOtherEvent();
+        }
     }
 }
 
@@ -552,6 +565,14 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
     ImGuiIO& io = ImGui::GetIO();
     switch (msg)
     {
+    case WM_ACTIVATEAPP:
+        dispatch();
+        #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_REVICE_INPUT_WHEN_WINDOW_FOCUS_LOST
+            return 1;
+        #else
+            return 0;
+        #endif
+    
     case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
     case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
     case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK:
@@ -573,7 +594,6 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
     
     case WM_SIZE:
     case WM_DEVICECHANGE:
-    case WM_ACTIVATEAPP:
         dispatch();
         return 0;
     
