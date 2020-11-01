@@ -2,8 +2,11 @@
 // If you are new to Dear ImGui, read documentation from the docs/ folder + read the top of imgui.cpp.
 // Read online: https://github.com/ocornut/imgui/tree/master/docs
 
+#pragma comment(lib, "User32.lib")
+
 #include <thread>
 #include <mutex>
+#include <functional>
 
 #include "imgui.h"
 #include "imgui_impl_win32_workingthread.h"
@@ -14,25 +17,27 @@
 #include <tchar.h>
 
 // Data
-static ID3D11Device*            g_pd3dDevice = NULL;
-static ID3D11DeviceContext*     g_pd3dDeviceContext = NULL;
-static IDXGISwapChain*          g_pSwapChain = NULL;
-static ID3D11RenderTargetView*  g_mainRenderTargetView = NULL;
+static ID3D11Device*            g_pd3dDevice            = nullptr;
+static ID3D11DeviceContext*     g_pd3dDeviceContext     = nullptr;
+static IDXGISwapChain*          g_pSwapChain            = nullptr;
+static ID3D11RenderTargetView*  g_mainRenderTargetView  = nullptr;
 
 // Forward declarations of helper functions
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
 void CleanupRenderTarget();
-LRESULT WINAPI WndProc2(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+bool CheckDeviceD3DState();
+static LRESULT WINAPI WindowProcess(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+// Working thread data
 static bool g_bExit = false;
 static bool g_bWantUpdateWindowSize = false;
 static UINT g_uWindowWidth = 1;
 static UINT g_uWindowHeight = 1;
 static std::recursive_mutex g_xWindowSizeLock;
 
-void working_thread(HWND hwnd)
+void WorkingThread(HWND hwnd)
 {
     // Initialize Direct3D
     if (!CreateDeviceD3D(hwnd))
@@ -76,8 +81,91 @@ void working_thread(HWND hwnd)
     bool show_another_window = false;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
     
+    // Some function
+    auto HandleDeviceD3DLose = [&]() -> void
+    {
+        HRESULT reason = g_pd3dDevice->GetDeviceRemovedReason();
+        #if defined(_DEBUG)
+            wchar_t outString[100];
+            size_t size = 100;
+            swprintf_s(outString, size, L"Device removed! DXGI_ERROR code: 0x%X\n", reason);
+            OutputDebugStringW(outString);
+        #endif
+        
+        ImGui_ImplDX11_Shutdown();
+        CleanupDeviceD3D();
+        
+        if (!CreateDeviceD3D(hwnd))
+        {
+            CleanupDeviceD3D();
+            return;
+        }
+        ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
+    };
+    auto HandleRender = [&](std::function<void()> render) -> void
+    {
+        if (g_xWindowSizeLock.try_lock())
+        {
+            const auto want_resize = g_bWantUpdateWindowSize;
+            g_bWantUpdateWindowSize = false;
+            const auto width = (g_uWindowWidth > 0) ? g_uWindowWidth : 1;
+            const auto height = (g_uWindowHeight > 0) ? g_uWindowHeight : 1;
+            g_xWindowSizeLock.unlock();
+            if (want_resize)
+            {
+                CleanupRenderTarget();
+                HRESULT hr = g_pSwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
+                if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+                {
+                    HandleDeviceD3DLose();
+                }
+                else
+                {
+                    CreateRenderTarget();
+                }
+            }
+        }
+        if (CheckDeviceD3DState())
+        {
+            ID3D11RenderTargetView* rtvs[1] = { g_mainRenderTargetView };
+            g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
+            g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, (float*)&clear_color);
+            
+            render();
+            
+            HRESULT hr = g_pSwapChain->Present(1, 0);
+            if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+            {
+                HandleDeviceD3DLose();
+            }
+        }
+        else
+        {
+            HandleDeviceD3DLose();
+        }
+    };
+    auto HandleFullscreen = [&]() -> void
+    {
+        static bool _alt_enter = false;
+        static bool _fullscreen = false;
+        const bool alt_enter_key = (GetKeyState(VK_MENU) & 0x8000) && (GetKeyState(VK_RETURN) & 0x8000);
+        if (!_alt_enter && alt_enter_key)
+        {
+            _alt_enter = true;
+            _fullscreen = !_fullscreen;
+            PostMessageW(hwnd, WM_USER + 64, 0, _fullscreen ? 2 : 1);
+        }
+        else if(!alt_enter_key)
+        {
+            _alt_enter = false;
+        }
+    };
+    
+    // Update and Render loop
     while(!g_bExit)
     {
+        HandleFullscreen();
+        
         // Start the Dear ImGui frame
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32WorkingThread_NewFrame();
@@ -120,37 +208,20 @@ void working_thread(HWND hwnd)
             ImGui::End();
         }
         
+        // End the Dear ImGui frame
         ImGui::EndFrame();
-        
-        // Rendering
         ImGui::Render();
         
-        g_xWindowSizeLock.lock();
-        const auto want_resize = g_bWantUpdateWindowSize;
-        g_bWantUpdateWindowSize = false;
-        const auto width = g_uWindowWidth;
-        const auto height = g_uWindowHeight;
-        g_xWindowSizeLock.unlock();
-        if (want_resize)
-        {
-            CleanupRenderTarget();
-            g_pSwapChain->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, 0);
-            CreateRenderTarget();
-        }
-        
-        g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, NULL);
-        g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, (float*)&clear_color);
-        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        
-        g_pSwapChain->Present(1, 0); // Present with vsync
-        //g_pSwapChain->Present(0, 0); // Present without vsync
+        // Rendering
+        HandleRender([&]() -> void {
+            ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        });
     }
     
     // Cleanup
     ImGui_ImplDX11_Shutdown();
     ImGui_ImplWin32WorkingThread_Shutdown();
     ImGui::DestroyContext();
-    
     CleanupDeviceD3D();
 }
 
@@ -159,7 +230,7 @@ int main(int, char**)
 {
     // Create application window
     //ImGui_ImplWin32_EnableDpiAwareness();
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WndProc2, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui Example"), NULL };
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WindowProcess, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui Example"), NULL };
     ::RegisterClassEx(&wc);
     HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Dear ImGui DirectX11 Example"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
     
@@ -167,7 +238,7 @@ int main(int, char**)
     ::ShowWindow(hwnd, SW_SHOWDEFAULT);
     ::UpdateWindow(hwnd);
     
-    std::thread workth(working_thread, hwnd);
+    std::thread workth(WorkingThread, hwnd);
     
     // Main loop
     MSG msg;
@@ -195,8 +266,8 @@ int main(int, char**)
     return 0;
 }
 
-// Helper functions
-
+// Direct3D function
+#define SAFE_RELEASE_COM(x) do { if(x != nullptr) { x->Release(); x = nullptr; } } while(false)
 bool CreateDeviceD3D(HWND hWnd)
 {
     // Setup swap chain
@@ -206,7 +277,7 @@ bool CreateDeviceD3D(HWND hWnd)
     sd.BufferDesc.Width = 0;
     sd.BufferDesc.Height = 0;
     sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    sd.BufferDesc.RefreshRate.Numerator = 60;
+    sd.BufferDesc.RefreshRate.Numerator = 0;
     sd.BufferDesc.RefreshRate.Denominator = 1;
     sd.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -215,44 +286,81 @@ bool CreateDeviceD3D(HWND hWnd)
     sd.SampleDesc.Quality = 0;
     sd.Windowed = TRUE;
     sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
+    
     UINT createDeviceFlags = 0;
-    //createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    #ifdef _DEBUG
+        createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+    #endif
     D3D_FEATURE_LEVEL featureLevel;
     const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0, };
     if (D3D11CreateDeviceAndSwapChain(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd, &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext) != S_OK)
         return false;
-
+    
+    // Get factory from device
+    IDXGIDevice*    pDXGIDevice     = nullptr;
+    IDXGIAdapter*   pDXGIAdapter    = nullptr;
+    IDXGIFactory*   pDXGIFactory    = nullptr;
+    if (g_pd3dDevice->QueryInterface(IID_PPV_ARGS(&pDXGIDevice)) == S_OK)
+        if (pDXGIDevice->GetParent(IID_PPV_ARGS(&pDXGIAdapter)) == S_OK)
+            if (pDXGIAdapter->GetParent(IID_PPV_ARGS(&pDXGIFactory)) == S_OK)
+            {
+                pDXGIFactory->MakeWindowAssociation(hWnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+            }
+    SAFE_RELEASE_COM(pDXGIDevice);
+    SAFE_RELEASE_COM(pDXGIAdapter);
+    SAFE_RELEASE_COM(pDXGIFactory);
+    
     CreateRenderTarget();
     return true;
 }
-
 void CleanupDeviceD3D()
 {
     CleanupRenderTarget();
-    if (g_pSwapChain) { g_pSwapChain->Release(); g_pSwapChain = NULL; }
-    if (g_pd3dDeviceContext) { g_pd3dDeviceContext->Release(); g_pd3dDeviceContext = NULL; }
-    if (g_pd3dDevice) { g_pd3dDevice->Release(); g_pd3dDevice = NULL; }
+    SAFE_RELEASE_COM(g_pSwapChain);
+    SAFE_RELEASE_COM(g_pd3dDeviceContext);
+    SAFE_RELEASE_COM(g_pd3dDevice);
 }
-
 void CreateRenderTarget()
 {
-    ID3D11Texture2D* pBackBuffer;
-    g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
-    g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
-    pBackBuffer->Release();
+    HRESULT hr = S_OK;
+    ID3D11Texture2D* pBackBuffer = nullptr;
+    hr = g_pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBackBuffer));
+    if (hr == S_OK)
+    {
+        hr = g_pd3dDevice->CreateRenderTargetView(pBackBuffer, NULL, &g_mainRenderTargetView);
+        if (hr != S_OK)
+        {
+            g_mainRenderTargetView = nullptr;
+        }
+        SAFE_RELEASE_COM(pBackBuffer);
+    }
 }
-
 void CleanupRenderTarget()
 {
-    if (g_mainRenderTargetView) { g_mainRenderTargetView->Release(); g_mainRenderTargetView = NULL; }
+    if (g_pd3dDeviceContext)
+    {
+        ID3D11RenderTargetView* rtvs[1] = { nullptr };
+        g_pd3dDeviceContext->OMSetRenderTargets(1, rtvs, nullptr);
+    }
+    SAFE_RELEASE_COM(g_mainRenderTargetView);
+}
+bool CheckDeviceD3DState()
+{
+    if (nullptr == g_pd3dDevice || nullptr == g_pd3dDeviceContext || nullptr == g_pSwapChain)
+        return false;
+    if (S_OK != g_pd3dDevice->GetDeviceRemovedReason())
+        return false;
+    if (nullptr == g_mainRenderTargetView)
+        return false;
+    else
+        return true;
 }
 
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Win32 message handler
-LRESULT WINAPI WndProc2(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+LRESULT WINAPI WindowProcess(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32WorkingThread_WndProcHandler(hWnd, msg, wParam, lParam))
         return true;
@@ -267,6 +375,30 @@ LRESULT WINAPI WndProc2(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_uWindowWidth = (UINT)LOWORD(lParam);
             g_uWindowHeight = (UINT)HIWORD(lParam);
             g_xWindowSizeLock.unlock();
+        }
+        return 0;
+    case WM_USER + 64:
+        if (lParam == 2)
+        {
+            HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
+            MONITORINFO info = {};
+            info.cbSize = sizeof(info);
+            if (FALSE != GetMonitorInfoW(monitor, &info))
+            {
+                SetWindowLongPtrW(hWnd, GWL_STYLE, WS_POPUP);
+                SetWindowPos(hWnd, HWND_TOPMOST,
+                    info.rcMonitor.left,
+                    info.rcMonitor.top,
+                    info.rcMonitor.right - info.rcMonitor.left,
+                    info.rcMonitor.bottom - info.rcMonitor.top,
+                    SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            }
+        }
+        else if (lParam == 1)
+        {
+            SetWindowLongPtrW(hWnd, GWL_STYLE, WS_OVERLAPPEDWINDOW);
+            SetWindowPos(hWnd, NULL, 0, 0, 0, 0, SWP_FRAMECHANGED);
+            ShowWindow(hWnd, SW_MAXIMIZE);
         }
         return 0;
     case WM_SYSCOMMAND:
