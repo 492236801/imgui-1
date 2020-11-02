@@ -30,8 +30,8 @@ IMGUI_IMPL_API void     ImGui_ImplWin32WorkingThread_NewFrame();
 
 // Configuration
 // - Disable gamepad support or linking with xinput.lib
-//#define IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
-//#define IMGUI_IMPL_WIN32_DISABLE_LINKING_XINPUT
+//#define IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
+//#define IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_LINKING_XINPUT
 // - Reset inputs when window focus lose
 //#define IMGUI_IMPL_WIN32WORKINGTHREAD_RESET_INPUT_WHEN_WINDOW_FOCUS_LOSE
 // - Recive input events on background (window focus lost)

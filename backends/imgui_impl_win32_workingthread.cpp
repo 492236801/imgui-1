@@ -32,12 +32,12 @@
 #include <tchar.h>
 
 // Using XInput library for gamepad (with recent Windows SDK this may leads to executables which won't run on Windows 7)
-#ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
+#ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
 #include <XInput.h>
 #else
-#define IMGUI_IMPL_WIN32_DISABLE_LINKING_XINPUT
+#define IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_LINKING_XINPUT
 #endif
-#if defined(_MSC_VER) && !defined(IMGUI_IMPL_WIN32_DISABLE_LINKING_XINPUT)
+#if defined(_MSC_VER) && !defined(IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_LINKING_XINPUT)
 #pragma comment(lib, "xinput")
 //#pragma comment(lib, "Xinput9_1_0")
 #endif
@@ -394,7 +394,7 @@ void ImGui_ImplWin32_UpdateMousePos()
 }
 void ImGui_ImplWin32_UpdateGamepads()
 {
-#ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
+#ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
     ImGuiIO& io = ImGui::GetIO();
     memset(io.NavInputs, 0, sizeof(io.NavInputs));
     if ((io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) == 0)
@@ -437,7 +437,7 @@ void ImGui_ImplWin32_UpdateGamepads()
         #undef MAP_BUTTON
         #undef MAP_ANALOG
     }
-#endif // #ifndef IMGUI_IMPL_WIN32_DISABLE_GAMEPAD
+#endif // #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
 }
 void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
 {
