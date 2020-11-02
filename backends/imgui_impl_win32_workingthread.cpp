@@ -54,7 +54,7 @@
 //  2020-11-01: First implement.
 
 // Data Queue
-enum class wtf_queue_data_state : uint8_t
+enum class wt_queue_data_state : uint8_t
 {
     unknown     = 0b00000000,
     write_start = 0b00000001,
@@ -63,13 +63,13 @@ enum class wtf_queue_data_state : uint8_t
     read_end    = 0b00001000,
 };
 template<typename T, size_t N>
-class wtf_queue
+class wt_queue
 {
 private:
     struct wtf_queue_data
     {
         wtf_queue_data* next;
-        wtf_queue_data_state state;
+        wt_queue_data_state state;
         T data;
     };
     wtf_queue_data _buffer[N];
@@ -78,13 +78,13 @@ private:
 public:
     bool write(const T& v)
     {
-        if ((uint8_t)_pwrite->state & (uint8_t)wtf_queue_data_state::read_end)
+        if ((uint8_t)_pwrite->state & (uint8_t)wt_queue_data_state::read_end)
         {
-            _pwrite->state = wtf_queue_data_state::unknown;
-            _pwrite->state = wtf_queue_data_state::write_start;
+            _pwrite->state = wt_queue_data_state::unknown;
+            _pwrite->state = wt_queue_data_state::write_start;
             _pwrite->data = v;
-            _pwrite->state = wtf_queue_data_state::unknown;
-            _pwrite->state = wtf_queue_data_state::write_end;
+            _pwrite->state = wt_queue_data_state::unknown;
+            _pwrite->state = wt_queue_data_state::write_end;
             _pwrite = _pwrite->next;
             return true;
         }
@@ -92,32 +92,32 @@ public:
     }
     bool read(T& v)
     {
-        if ((uint8_t)_pread->state & (uint8_t)wtf_queue_data_state::write_end)
+        if ((uint8_t)_pread->state & (uint8_t)wt_queue_data_state::write_end)
         {
-            _pread->state = wtf_queue_data_state::unknown;
-            _pread->state = wtf_queue_data_state::read_start;
+            _pread->state = wt_queue_data_state::unknown;
+            _pread->state = wt_queue_data_state::read_start;
             v = _pread->data;
-            _pread->state = wtf_queue_data_state::unknown;
-            _pread->state = wtf_queue_data_state::read_end;
+            _pread->state = wt_queue_data_state::unknown;
+            _pread->state = wt_queue_data_state::read_end;
             _pread = _pread->next;
             return true;
         }
         return false;
     }
 public:
-    wtf_queue()
+    wt_queue()
     {
         for (size_t idx = 0; idx < (N - 1); idx += 1)
         {
             _buffer[idx].next = &_buffer[idx + 1];
-            _buffer[idx].state = wtf_queue_data_state::read_end;
+            _buffer[idx].state = wt_queue_data_state::read_end;
         }
         _buffer[N - 1].next = &_buffer[0];
-        _buffer[N - 1].state = wtf_queue_data_state::read_end;
+        _buffer[N - 1].state = wt_queue_data_state::read_end;
         _pread = &_buffer[0];
         _pwrite = &_buffer[0];
     }
-    ~wtf_queue() = default;
+    ~wt_queue() = default;
 };
 
 // ImGui Data
@@ -132,15 +132,32 @@ static bool                 g_HasGamepad = false;
 static bool                 g_WantUpdateHasGamepad = true;
 
 // Win32 ImGui Data Exchange
-static bool                 g_bWindowFocus = true;
-static wtf_queue<MSG, 1024> g_vWin32MSG;
-static bool                 g_bUpdateCursor = false;
-static LPCWSTR              g_sCursorName = IDC_ARROW;
+struct WNDMSG {
+    HWND        hwnd;
+    UINT        message;
+    WPARAM      wParam;
+    LPARAM      lParam;
+};
+using wt_msg_queue = wt_queue<WNDMSG, 1024>;
+
+constexpr UINT MSG_NONE             = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD;
+constexpr UINT MSG_MOUSE_CAPTURE    = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1;
+constexpr UINT MSG_SET_MOUSE_POS    = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2;
+constexpr UINT MSG_SET_MOUSE_CURSOR = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 3;
+constexpr UINT MSG_SET_IME_POS      = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 4;
+
+constexpr WPARAM MSG_MOUSE_CAPTURE_SET     = 1;
+constexpr WPARAM MSG_MOUSE_CAPTURE_RELEASE = 2;
+
+static bool             g_bWindowFocus = true;
+static wt_msg_queue     g_vWin32MSG;
+static bool             g_bUpdateCursor = false;
+static LPCWSTR          g_sCursorName = IDC_ARROW;
 
 void ImGui_ImplWin32WorkingThread_ProcessMessage()
 {
     ImGuiIO& io = ImGui::GetIO();
-    MSG msg;
+    WNDMSG msg;
     
     auto resetImGuiInput = [&]() -> void
     {
@@ -149,7 +166,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
             io.MouseWheel = 0;
             io.MouseWheelH = 0;
             io.MousePos = ImVec2(0.0f, 0.0f);
-            PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 2, 0); // cancel capture
+            PostMessageW(g_hWnd, MSG_MOUSE_CAPTURE, MSG_MOUSE_CAPTURE_RELEASE, 0); // cancel capture
             
             std::memset(&io.KeysDown, 0, sizeof(io.KeysDown));
             io.KeyShift = false;
@@ -214,7 +231,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
                     button = (GET_XBUTTON_WPARAM(msg.wParam) == XBUTTON1) ? 3 : 4;
                 if (!ImGui::IsAnyMouseDown())
                 {
-                    PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 1, 0);
+                    PostMessageW(g_hWnd, MSG_MOUSE_CAPTURE, MSG_MOUSE_CAPTURE_SET, 0);
                 }
                 io.MouseDown[button] = true;
             }
@@ -237,7 +254,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
                 io.MouseDown[button] = false;
                 if (!ImGui::IsAnyMouseDown())
                 {
-                    PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1, 2, 0);
+                    PostMessageW(g_hWnd, MSG_MOUSE_CAPTURE, MSG_MOUSE_CAPTURE_RELEASE, 0);
                 }
             }
             updateMousePosition();
@@ -336,6 +353,7 @@ bool ImGui_ImplWin32_UpdateMouseCursor()
     {
         // Hide OS mouse cursor if imgui is drawing it or if it wants no cursor
         g_sCursorName = NULL;
+        PostMessageW(g_hWnd, MSG_SET_MOUSE_CURSOR, 0, 0);
     }
     else
     {
@@ -353,6 +371,7 @@ bool ImGui_ImplWin32_UpdateMouseCursor()
         case ImGuiMouseCursor_Hand:         g_sCursorName = IDC_HAND;        break;
         case ImGuiMouseCursor_NotAllowed:   g_sCursorName = IDC_NO;          break;
         }
+        PostMessageW(g_hWnd, MSG_SET_MOUSE_CURSOR, 0, 0);
     }
     
     return true;
@@ -368,7 +387,7 @@ void ImGui_ImplWin32_UpdateMousePos()
         static size_t _cache_mouse_position_index = 0;
         
         _cache_mouse_position[_cache_mouse_position_index] = io.MousePos;
-        PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2, 0,
+        PostMessageW(g_hWnd, MSG_SET_MOUSE_POS, 0,
             (LPARAM)(ptrdiff_t)(&_cache_mouse_position[_cache_mouse_position_index]));
         
         _cache_mouse_position_index = (_cache_mouse_position_index + 1) % 16;
@@ -428,7 +447,7 @@ void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
     
     _cache_ime_position[_cache_ime_position_index] = x;
     _cache_ime_position[_cache_ime_position_index + 1] = y;
-    PostMessageW(g_hWnd, WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 3, 0,
+    PostMessageW(g_hWnd, MSG_SET_IME_POS, 0,
         (LPARAM)(ptrdiff_t)(&_cache_ime_position[_cache_ime_position_index]));
     
     _cache_ime_position_index = (_cache_ime_position_index + 2) % 32;
@@ -495,7 +514,7 @@ void    ImGui_ImplWin32WorkingThread_Shutdown()
     g_WantUpdateHasGamepad = true;
     
     g_bWindowFocus = true;
-    g_vWin32MSG = wtf_queue<MSG, 1024>(); // clean
+    g_vWin32MSG = wt_msg_queue(); // clean
     g_bUpdateCursor = false;
     g_sCursorName = IDC_ARROW;
 }
@@ -554,11 +573,7 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
     
     auto dispatch = [&]() -> void
     {
-        MSG msg_v = { 0 };
-        msg_v.hwnd = hwnd;
-        msg_v.message = msg;
-        msg_v.wParam = wParam;
-        msg_v.lParam = lParam;
+        WNDMSG msg_v = { hwnd, msg, wParam, lParam };
         g_vWin32MSG.write(msg_v); // what will happen if queue is full ???
     };
     
@@ -607,16 +622,16 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
             return 1;
         }
         return 0;
-    case WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1:
+    case MSG_MOUSE_CAPTURE:
         switch(wParam)
         {
-        case 1:
+        case MSG_MOUSE_CAPTURE_SET:
             if (GetCapture() == NULL)
             {
                 SetCapture(hwnd);
             }
             break;
-        case 2:
+        case MSG_MOUSE_CAPTURE_RELEASE:
             if (GetCapture() == hwnd)
             {
                 ReleaseCapture();
@@ -624,7 +639,7 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
             break;
         }
         return 0;
-    case WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 2:
+    case MSG_SET_MOUSE_POS:
         {
             ImVec2* ptr = (ImVec2*)(ptrdiff_t)lParam;
             POINT pos = { (int)ptr->x, (int)ptr->y };
@@ -632,7 +647,15 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
             SetCursorPos(pos.x, pos.y);
         }
         return 0;
-    case WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 3:
+    case MSG_SET_MOUSE_CURSOR:
+        {
+            if (g_sCursorName != NULL)
+                SetCursor(LoadCursorW(NULL, g_sCursorName));
+            else
+                SetCursor(NULL);
+        }
+        return 1;
+    case MSG_SET_IME_POS:
         {
             int* ptr = (int*)(ptrdiff_t)lParam;
             if (HIMC himc = ImmGetContext(hwnd))
