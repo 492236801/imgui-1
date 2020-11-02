@@ -11,25 +11,48 @@
 //  [X] Platform: It's safety to using this implement on working thread (different to "Win32 GUI thread").
 
 // Warning:
-//  1. This is a experimental implement and may have many bugs.
+//  1. This is a experimental implement and may have many bugs. DO NOT USE ON PRODUCTION ENVIRONMENTS.
 //  2. Lock free message exchange queue (g_vWin32MSG) may be full and some Win32 messages will be missed.
-//  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working because it is asynchronous (execution order is not guaranteed).
+//  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working in some case
+//     because it is asynchronous (execution order is not guaranteed).
 //  4. Input delay may be large.
-//  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working.
+//  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working in some case.
+
+// Change logs:
+//  2020-11-01: First implement.
 
 // You can copy and use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
 // If you are new to Dear ImGui, read documentation from the docs/ folder + read the top of imgui.cpp.
 // Read online: https://github.com/ocornut/imgui/tree/master/docs
 
+
+#include <cstdint>
 #include "imgui.h"
 #include "imgui_impl_win32_workingthread.h"
+
+
+// Windows.h
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
-#include <vector>
 #include <Windows.h>
-#include <windowsx.h>
-#include <tchar.h>
+
+// Allow compilation with old Windows SDK. MinGW doesn't have default _WIN32_WINNT/WINVER versions.
+// WinUser.h
+#ifndef WM_MOUSEHWHEEL
+#define WM_MOUSEHWHEEL 0x020E
+#endif
+// Dbt.h
+#ifndef DBT_DEVNODES_CHANGED
+#define DBT_DEVNODES_CHANGED 0x0007
+#endif
+// windowsx.h
+#ifndef GET_X_LPARAM
+#define GET_X_LPARAM(lp) ((int)(short)LOWORD(lp))
+#endif
+#ifndef GET_Y_LPARAM
+#define GET_Y_LPARAM(lp) ((int)(short)HIWORD(lp))
+#endif
 
 // Using XInput library for gamepad (with recent Windows SDK this may leads to executables which won't run on Windows 7)
 #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
@@ -42,26 +65,18 @@
 //#pragma comment(lib, "Xinput9_1_0")
 #endif
 
-// Allow compilation with old Windows SDK. MinGW doesn't have default _WIN32_WINNT/WINVER versions.
-#ifndef WM_MOUSEHWHEEL
-#define WM_MOUSEHWHEEL 0x020E
-#endif
-#ifndef DBT_DEVNODES_CHANGED
-#define DBT_DEVNODES_CHANGED 0x0007
-#endif
-
-// CHANGELOG
-//  2020-11-01: First implement.
 
 // Data Queue
-enum class wt_queue_data_state : uint8_t
+
+enum class wt_queue_data_state : ptrdiff_t
 {
-    unknown     = 0b00000000,
-    write_start = 0b00000001,
-    write_end   = 0b00000010,
-    read_start  = 0b00000100,
-    read_end    = 0b00001000,
+    unknown     = 0,
+    write_start = 1,
+    write_end   = 2,
+    read_start  = 4,
+    read_end    = 8,
 };
+
 template<typename T, size_t N>
 class wt_queue
 {
@@ -120,10 +135,21 @@ public:
     ~wt_queue() = default;
 };
 
+struct WNDMSG {
+    HWND        hwnd;
+    UINT        message;
+    WPARAM      wParam;
+    LPARAM      lParam;
+};
+
+using wt_msg_queue = wt_queue<WNDMSG, 1024>;
+
 // ImGui Data
+
 static void (*g_fLastSetIMEPosFn)(int x, int y) = NULL;
 
 // Win32 Data
+
 static HWND                 g_hWnd = NULL;
 static INT64                g_Time = 0;
 static INT64                g_TicksPerSecond = 0;
@@ -132,13 +158,6 @@ static bool                 g_HasGamepad = false;
 static bool                 g_WantUpdateHasGamepad = true;
 
 // Win32 ImGui Data Exchange
-struct WNDMSG {
-    HWND        hwnd;
-    UINT        message;
-    WPARAM      wParam;
-    LPARAM      lParam;
-};
-using wt_msg_queue = wt_queue<WNDMSG, 1024>;
 
 constexpr UINT MSG_NONE             = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD;
 constexpr UINT MSG_MOUSE_CAPTURE    = WM_USER_IMGUI_IMPL_WIN32WORKINGTHREAD + 1;
@@ -280,7 +299,9 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
             return true;
         case WM_CHAR:
             if (msg.wParam > 0 && msg.wParam < 0x10000)
+            {
                 io.AddInputCharacterUTF16((ImWchar16)msg.wParam);
+            }
             return true;
         }
         return false;
@@ -334,6 +355,7 @@ void ImGui_ImplWin32WorkingThread_ProcessMessage()
 }
 
 // Functions
+
 static_assert(sizeof(LPARAM) >= sizeof(ptrdiff_t), "If you compiler hit this assert, please tell me.");
 bool ImGui_ImplWin32_UpdateMouseCursor()
 {
@@ -379,7 +401,7 @@ bool ImGui_ImplWin32_UpdateMouseCursor()
 void ImGui_ImplWin32_UpdateMousePos()
 {
     ImGuiIO& io = ImGui::GetIO();
-
+    
     // Set OS mouse position if requested (rarely used, only when ImGuiConfigFlags_NavEnableSetMousePos is enabled by user)
     if (io.WantSetMousePos)
     {
@@ -394,6 +416,7 @@ void ImGui_ImplWin32_UpdateMousePos()
 }
 void ImGui_ImplWin32_UpdateGamepads()
 {
+    // we didn't need to consider GUI thread in this function
 #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
     ImGuiIO& io = ImGui::GetIO();
     memset(io.NavInputs, 0, sizeof(io.NavInputs));
@@ -437,7 +460,7 @@ void ImGui_ImplWin32_UpdateGamepads()
         #undef MAP_BUTTON
         #undef MAP_ANALOG
     }
-#endif // #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
+#endif // IMGUI_IMPL_WIN32WORKINGTHREAD_DISABLE_GAMEPAD
 }
 void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
 {
@@ -451,6 +474,7 @@ void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
 }
 
 // API
+
 bool    ImGui_ImplWin32WorkingThread_Init(void* hwnd)
 {
     if (FALSE == QueryPerformanceFrequency((LARGE_INTEGER*)&g_TicksPerSecond))
@@ -548,15 +572,17 @@ void    ImGui_ImplWin32WorkingThread_NewFrame()
     ImGui_ImplWin32_UpdateGamepads();
 }
 
-
 // Win32 message handler (process Win32 mouse/keyboard inputs, etc.)
 // Call from your application's message handler.
-// When implementing your own backend, you can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if Dear ImGui wants to use your inputs.
+// When implementing your own backend, you can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags
+// to tell if Dear ImGui wants to use your inputs.
 // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application.
 // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application.
 // Generally you may always pass all inputs to Dear ImGui, and hide them from your application based on those two flags.
-// PS: In this Win32 handler, we use the capture API (GetCapture/SetCapture/ReleaseCapture) to be able to read mouse coordinates when dragging mouse outside of our window bounds.
-// PS: We treat DBLCLK messages as regular mouse down messages, so this code will work on windows classes that have the CS_DBLCLKS flag set. Our own example app code doesn't set this flag.
+// PS: In this Win32 handler, we use the capture API (GetCapture/SetCapture/ReleaseCapture)
+//     to be able to read mouse coordinates when dragging mouse outside of our window bounds.
+// PS: We treat DBLCLK messages as regular mouse down messages, so this code will work on windows classes that
+//     have the CS_DBLCLKS flag set. Our own example app code doesn't set this flag.
 #if 0
 // Copy this line into your .cpp file to forward declare the function.
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -566,29 +592,44 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
     if (ImGui::GetCurrentContext() == NULL)
         return 0;
     if (hwnd != g_hWnd)
-        return 0;
+        return 0; // we only need to process messages belong to our target window (g_hWnd)
     
     auto dispatch = [&]() -> void
     {
         WNDMSG msg_v = { hwnd, msg, wParam, lParam };
-        g_vWin32MSG.write(msg_v); // what will happen if queue is full ???
+        if (!g_vWin32MSG.write(msg_v))
+        {
+            #ifdef _DEBUG
+            // what happen if queue is full ???
+            // in most of case, g_vWin32MSG will not be full,
+            // even if your application run on very low FPS,
+            // because we only process those messages we need.
+            OutputDebugStringA("ImGui_ImplWin32WorkingThread: g_vWin32MSG is full\n");
+            #endif
+        }
     };
     
     ImGuiIO& io = ImGui::GetIO();
     switch (msg)
     {
+    // messages we want to send to imgui (working thread)
+    
     case WM_ACTIVATEAPP:
         dispatch();
         #ifndef IMGUI_IMPL_WIN32WORKINGTHREAD_REVICE_INPUT_WHEN_WINDOW_FOCUS_LOST
-            return 1;
+        return 1; // tell GUI thread do not continue to pass this message
         #else
-            return 0;
+        return 0;
         #endif
     
-    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
-    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
-    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK:
-    case WM_XBUTTONDOWN: case WM_XBUTTONDBLCLK:
+    case WM_LBUTTONDOWN:
+    case WM_RBUTTONDOWN:
+    case WM_MBUTTONDOWN:
+    case WM_XBUTTONDOWN:
+    case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDBLCLK:
+    case WM_XBUTTONDBLCLK:
     case WM_LBUTTONUP:
     case WM_RBUTTONUP:
     case WM_MBUTTONUP:
@@ -609,16 +650,8 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
         dispatch();
         return 0;
     
-    case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT && g_bUpdateCursor)
-        {
-            if (g_sCursorName != NULL)
-                SetCursor(LoadCursorW(NULL, g_sCursorName));
-            else
-                SetCursor(NULL);
-            return 1;
-        }
-        return 0;
+    // messages we recive from imgui (working thread)
+    
     case MSG_MOUSE_CAPTURE:
         switch(wParam)
         {
@@ -651,9 +684,10 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
             else
                 SetCursor(NULL);
         }
-        return 1;
+        return 1; // tell GUI thread do not continue to pass this message
     case MSG_SET_IME_POS:
         {
+            // codes from imgui.cpp
             POINT* ptr = (POINT*)(ptrdiff_t)lParam;
             if (HIMC himc = ImmGetContext(hwnd))
             {
@@ -663,6 +697,19 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
                 ImmSetCompositionWindow(himc, &cf);
                 ImmReleaseContext(hwnd, himc);
             }
+        }
+        return 0;
+    
+    // other messages
+    
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT && g_bUpdateCursor)
+        {
+            if (g_sCursorName != NULL)
+                SetCursor(LoadCursorW(NULL, g_sCursorName));
+            else
+                SetCursor(NULL);
+            return 1; // tell GUI thread do not continue to pass this message
         }
         return 0;
     }
