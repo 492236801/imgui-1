@@ -8,18 +8,19 @@
 //  [X] Platform: Gamepad support. Enabled with 'io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad'.
 
 // Experimental features:
-//  [X] Platform: It's safer to using this implement on your working thread (different to Win32 "GUI thread").
+//  [X] Platform: It's safety to using this implement on working thread (different to "Win32 GUI thread").
 
 // Warning:
-//  1. This is a experimental implement and may have many bugs.
+//  1. This is a experimental implement and may have many bugs. DO NOT USE ON PRODUCTION ENVIRONMENTS.
 //  2. Lock free message exchange queue (g_vWin32MSG) may be full and some Win32 messages will be missed.
-//  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working because it is asynchronous (execution order is not guaranteed).
+//  3. Mouse capture (Win32 API SetCapture, GetCapture and ReleaseCapture) may not working in some case
+//     because it is asynchronous (execution order is not guaranteed).
 //  4. Input delay may be large.
-//  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working.
+//  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working in some case.
 
-// You can copy and use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
-// If you are new to Dear ImGui, read documentation from the docs/ folder + read the top of imgui.cpp.
-// Read online: https://github.com/ocornut/imgui/tree/master/docs
+// Change logs:
+//  2020-11-01: First implement and add a example (example_win32_workingthread_directx11).
+//  2020-11-01: Fixed the wrong IME candidate list position bug.
 
 #pragma once
 #include "imgui.h"      // IMGUI_IMPL_API

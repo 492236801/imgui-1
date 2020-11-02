@@ -19,7 +19,8 @@
 //  5. Support ImGuiBackendFlags_HasSetMousePos, but the reason same as (3), it may not working in some case.
 
 // Change logs:
-//  2020-11-01: First implement.
+//  2020-11-01: First implement and add a example (example_win32_workingthread_directx11).
+//  2020-11-01: Fixed the wrong IME candidate list position bug.
 
 // You can copy and use unmodified imgui_impl_* files in your project. See examples/ folder for examples of using this.
 // If you are new to Dear ImGui, read documentation from the docs/ folder + read the top of imgui.cpp.
