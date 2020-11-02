@@ -383,14 +383,13 @@ void ImGui_ImplWin32_UpdateMousePos()
     // Set OS mouse position if requested (rarely used, only when ImGuiConfigFlags_NavEnableSetMousePos is enabled by user)
     if (io.WantSetMousePos)
     {
-        static ImVec2 _cache_mouse_position[16] = {};
-        static size_t _cache_mouse_position_index = 0;
+        static POINT mouse_pos[16];
+        static size_t mouse_pos_idx = 0;
         
-        _cache_mouse_position[_cache_mouse_position_index] = io.MousePos;
-        PostMessageW(g_hWnd, MSG_SET_MOUSE_POS, 0,
-            (LPARAM)(ptrdiff_t)(&_cache_mouse_position[_cache_mouse_position_index]));
+        mouse_pos[mouse_pos_idx] = { (LONG)(io.MousePos.x), (LONG)(io.MousePos.y) };
+        PostMessageW(g_hWnd, MSG_SET_MOUSE_POS, 0, (LPARAM)(ptrdiff_t)(&mouse_pos[mouse_pos_idx]));
         
-        _cache_mouse_position_index = (_cache_mouse_position_index + 1) % 16;
+        mouse_pos_idx = (mouse_pos_idx + 1) % 16;
     }
 }
 void ImGui_ImplWin32_UpdateGamepads()
@@ -442,15 +441,13 @@ void ImGui_ImplWin32_UpdateGamepads()
 }
 void ImGui_ImplWin32_UpdateIMEPos(int x, int y)
 {
-    static int _cache_ime_position[32] = {};
-    static size_t _cache_ime_position_index = 0;
+    static POINT ime_pos[16];
+    static size_t ime_pos_idx = 0;
     
-    _cache_ime_position[_cache_ime_position_index] = x;
-    _cache_ime_position[_cache_ime_position_index + 1] = y;
-    PostMessageW(g_hWnd, MSG_SET_IME_POS, 0,
-        (LPARAM)(ptrdiff_t)(&_cache_ime_position[_cache_ime_position_index]));
+    ime_pos[ime_pos_idx] = { (LONG)x, (LONG)y };
+    PostMessageW(g_hWnd, MSG_SET_IME_POS, 0, (LPARAM)(ptrdiff_t)(&ime_pos[ime_pos_idx]));
     
-    _cache_ime_position_index = (_cache_ime_position_index + 2) % 32;
+    ime_pos_idx = (ime_pos_idx + 1) % 16;
 }
 
 // API
@@ -641,8 +638,8 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
         return 0;
     case MSG_SET_MOUSE_POS:
         {
-            ImVec2* ptr = (ImVec2*)(ptrdiff_t)lParam;
-            POINT pos = { (int)ptr->x, (int)ptr->y };
+            POINT* ptr = (POINT*)(ptrdiff_t)lParam;
+            POINT pos = *ptr;
             ClientToScreen(hwnd, &pos);
             SetCursorPos(pos.x, pos.y);
         }
@@ -657,12 +654,11 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hwnd, UI
         return 1;
     case MSG_SET_IME_POS:
         {
-            int* ptr = (int*)(ptrdiff_t)lParam;
+            POINT* ptr = (POINT*)(ptrdiff_t)lParam;
             if (HIMC himc = ImmGetContext(hwnd))
             {
                 COMPOSITIONFORM cf;
-                cf.ptCurrentPos.x = ptr[0];
-                cf.ptCurrentPos.y = ptr[1];
+                cf.ptCurrentPos = *ptr;
                 cf.dwStyle = CFS_FORCE_POSITION;
                 ImmSetCompositionWindow(himc, &cf);
                 ImmReleaseContext(hwnd, himc);
