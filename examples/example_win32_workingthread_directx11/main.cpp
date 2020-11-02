@@ -12,17 +12,14 @@
 #include "imgui_impl_win32_workingthread.h"
 #include "imgui_impl_dx11.h"
 #include <d3d11.h>
-#define DIRECTINPUT_VERSION 0x0800
-#include <dinput.h>
-#include <tchar.h>
 
-// Data
+// Helper datas and functions
+
 static ID3D11Device*            g_pd3dDevice            = nullptr;
 static ID3D11DeviceContext*     g_pd3dDeviceContext     = nullptr;
 static IDXGISwapChain*          g_pSwapChain            = nullptr;
 static ID3D11RenderTargetView*  g_mainRenderTargetView  = nullptr;
 
-// Forward declarations of helper functions
 bool CreateDeviceD3D(HWND hWnd);
 void CleanupDeviceD3D();
 void CreateRenderTarget();
@@ -31,10 +28,16 @@ bool CheckDeviceD3DState();
 static LRESULT WINAPI WindowProcess(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 // Working thread data
-static bool g_bExit = false;
-static bool g_bWantUpdateWindowSize = false;
-static UINT g_uWindowWidth = 1;
-static UINT g_uWindowHeight = 1;
+
+constexpr UINT MSG_SWITCH_DISPLAY_MODE = WM_USER + 64;
+
+constexpr WPARAM MSG_SWITCH_DISPLAY_MODE_WINDOWED   = 1;
+constexpr WPARAM MSG_SWITCH_DISPLAY_MODE_FULLSCREEN = 2;
+
+static bool                 g_bExit                 = false;
+static bool                 g_bWantUpdateWindowSize = false;
+static UINT                 g_uWindowWidth          = 1;
+static UINT                 g_uWindowHeight         = 1;
 static std::recursive_mutex g_xWindowSizeLock;
 
 void WorkingThread(HWND hwnd)
@@ -43,6 +46,7 @@ void WorkingThread(HWND hwnd)
     if (!CreateDeviceD3D(hwnd))
     {
         CleanupDeviceD3D();
+        g_bExit = true;
         return;
     }
     
@@ -98,11 +102,12 @@ void WorkingThread(HWND hwnd)
         if (!CreateDeviceD3D(hwnd))
         {
             CleanupDeviceD3D();
+            g_bExit = true;
             return;
         }
         ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
     };
-    auto HandleRender = [&](std::function<void()> render) -> void
+    auto HandleRender = [&](const std::function<void()>& render) -> void
     {
         if (g_xWindowSizeLock.try_lock())
         {
@@ -146,6 +151,7 @@ void WorkingThread(HWND hwnd)
     };
     auto HandleFullscreen = [&]() -> void
     {
+        // only trigger on alt+enter down
         static bool _alt_enter = false;
         static bool _fullscreen = false;
         const bool alt_enter_key = (GetKeyState(VK_MENU) & 0x8000) && (GetKeyState(VK_RETURN) & 0x8000);
@@ -153,7 +159,8 @@ void WorkingThread(HWND hwnd)
         {
             _alt_enter = true;
             _fullscreen = !_fullscreen;
-            PostMessageW(hwnd, WM_USER + 64, 0, _fullscreen ? 2 : 1);
+            PostMessageW(hwnd, MSG_SWITCH_DISPLAY_MODE,
+                _fullscreen ? MSG_SWITCH_DISPLAY_MODE_FULLSCREEN : MSG_SWITCH_DISPLAY_MODE_WINDOWED, 0);
         }
         else if(!alt_enter_key)
         {
@@ -185,12 +192,12 @@ void WorkingThread(HWND hwnd)
             ImGui::Text("This is some useful text.");               // Display some text (you can use a format strings too)
             ImGui::Checkbox("Demo Window", &show_demo_window);      // Edit bools storing our window open/close state
             ImGui::Checkbox("Another Window", &show_another_window);
+            if (ImGui::Button("Close Application")) g_bExit = true; // Escape working loop and tell GUI thread exit message loop
             
             ImGui::SliderFloat("float", &f, 0.0f, 1.0f);            // Edit 1 float using a slider from 0.0f to 1.0f
             ImGui::ColorEdit3("clear color", (float*)&clear_color); // Edit 3 floats representing a color
             
-            if (ImGui::Button("Button"))                            // Buttons return true when clicked (most widgets return true when edited/activated)
-                counter++;
+            if (ImGui::Button("Button")) counter++;                 // Buttons return true when clicked (most widgets return true when edited/activated)
             ImGui::SameLine();
             ImGui::Text("counter = %d", counter);
             
@@ -225,48 +232,52 @@ void WorkingThread(HWND hwnd)
     CleanupDeviceD3D();
 }
 
-// Main code
+// 'Main' and GUI thread
+
 int main(int, char**)
 {
     // Create application window
     //ImGui_ImplWin32_EnableDpiAwareness();
-    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WindowProcess, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("ImGui Example"), NULL };
-    ::RegisterClassEx(&wc);
-    HWND hwnd = ::CreateWindow(wc.lpszClassName, _T("Dear ImGui DirectX11 Example"), WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, WindowProcess, 0L, 0L, GetModuleHandleW(NULL), NULL, NULL, NULL, NULL, L"ImGui Example", NULL };
+    RegisterClassExW(&wc);
+    HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"Dear ImGui DirectX11 Example", WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, NULL, NULL, wc.hInstance, NULL);
     
     // Show the window
-    ::ShowWindow(hwnd, SW_SHOWDEFAULT);
-    ::UpdateWindow(hwnd);
+    ShowWindow(hwnd, SW_SHOWDEFAULT);
+    UpdateWindow(hwnd);
     
     std::thread workth(WorkingThread, hwnd);
     
     // Main loop
     MSG msg;
     ZeroMemory(&msg, sizeof(msg));
-    while (msg.message != WM_QUIT)
+    while (!g_bExit && msg.message != WM_QUIT)
     {
         // Poll and handle messages (inputs, window resize, etc.)
         // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
         // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application.
         // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application.
         // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
-        if (::PeekMessage(&msg, NULL, 0U, 0U, PM_REMOVE))
+        if (PeekMessageW(&msg, NULL, 0U, 0U, PM_REMOVE))
         {
-            ::TranslateMessage(&msg);
-            ::DispatchMessage(&msg);
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
     }
     
+    // Wait working thread
     g_bExit = true;
     workth.join();
     
-    ::DestroyWindow(hwnd);
-    ::UnregisterClass(wc.lpszClassName, wc.hInstance);
+    // Clean
+    DestroyWindow(hwnd);
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);
     
     return 0;
 }
 
 // Direct3D function
+
 #define SAFE_RELEASE_COM(x) do { if(x != nullptr) { x->Release(); x = nullptr; } } while(false)
 bool CreateDeviceD3D(HWND hWnd)
 {
@@ -304,6 +315,8 @@ bool CreateDeviceD3D(HWND hWnd)
         if (pDXGIDevice->GetParent(IID_PPV_ARGS(&pDXGIAdapter)) == S_OK)
             if (pDXGIAdapter->GetParent(IID_PPV_ARGS(&pDXGIFactory)) == S_OK)
             {
+                // we didn't need default alt+enter fullscreen switch (exclusive fullscreen mode will cause crash)
+                // instead, using fullscreen window mode
                 pDXGIFactory->MakeWindowAssociation(hWnd, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
             }
     SAFE_RELEASE_COM(pDXGIDevice);
@@ -356,15 +369,15 @@ bool CheckDeviceD3DState()
         return true;
 }
 
+// Win32 message handler
+
 // Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32WorkingThread_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-
-// Win32 message handler
 LRESULT WINAPI WindowProcess(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (ImGui_ImplWin32WorkingThread_WndProcHandler(hWnd, msg, wParam, lParam))
-        return true;
-
+        return true; // do not continue to process message
+    
     switch (msg)
     {
     case WM_SIZE:
@@ -377,37 +390,41 @@ LRESULT WINAPI WindowProcess(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             g_xWindowSizeLock.unlock();
         }
         return 0;
-    case WM_USER + 64:
-        if (lParam == 2)
-        {
-            HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
-            MONITORINFO info = {};
-            info.cbSize = sizeof(info);
-            if (FALSE != GetMonitorInfoW(monitor, &info))
-            {
-                SetWindowLongPtrW(hWnd, GWL_STYLE, WS_POPUP);
-                SetWindowPos(hWnd, HWND_TOPMOST,
-                    info.rcMonitor.left,
-                    info.rcMonitor.top,
-                    info.rcMonitor.right - info.rcMonitor.left,
-                    info.rcMonitor.bottom - info.rcMonitor.top,
-                    SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            }
-        }
-        else if (lParam == 1)
-        {
-            SetWindowLongPtrW(hWnd, GWL_STYLE, WS_OVERLAPPEDWINDOW);
-            SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOMOVE);
-            ShowWindow(hWnd, SW_MAXIMIZE);
-        }
-        return 0;
     case WM_SYSCOMMAND:
-        if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
-            return 0;
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0; // Disable ALT application menu (becase imgui also using ALT key)
         break;
     case WM_DESTROY:
-        ::PostQuitMessage(0);
+        PostQuitMessage(0);
+        return 0;
+    case MSG_SWITCH_DISPLAY_MODE:
+        switch(wParam)
+        {
+        case MSG_SWITCH_DISPLAY_MODE_WINDOWED:
+            {
+                SetWindowLongPtrW(hWnd, GWL_STYLE, WS_OVERLAPPEDWINDOW);
+                SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOSIZE | SWP_NOMOVE);
+                ShowWindow(hWnd, SW_MAXIMIZE);
+            }
+            break;
+        case MSG_SWITCH_DISPLAY_MODE_FULLSCREEN:
+            {
+                HMONITOR monitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTOPRIMARY);
+                MONITORINFO info = {};
+                info.cbSize = sizeof(info);
+                if (FALSE != GetMonitorInfoW(monitor, &info))
+                {
+                    SetWindowLongPtrW(hWnd, GWL_STYLE, WS_POPUP);
+                    SetWindowPos(hWnd, HWND_TOPMOST,
+                        info.rcMonitor.left,
+                        info.rcMonitor.top,
+                        info.rcMonitor.right - info.rcMonitor.left,
+                        info.rcMonitor.bottom - info.rcMonitor.top,
+                        SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+                }
+            }
+            break;
+        }
         return 0;
     }
-    return ::DefWindowProc(hWnd, msg, wParam, lParam);
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
